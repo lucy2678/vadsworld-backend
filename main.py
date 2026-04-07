@@ -1,0 +1,162 @@
+from fastapi import FastAPI, Depends, HTTPException, Header
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, text
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session
+from eth_account.messages import encode_defunct
+from web3.auto import w3
+import os
+from datetime import datetime, timedelta
+
+app = FastAPI(title="VadsWorld API")
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
+
+# Database Setup
+SQLALCHEMY_DATABASE_URL = "sqlite:///./vadsworld.db"
+engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+class Ad(Base):
+    __tablename__ = "ads"
+    id = Column(Integer, primary_key=True, index=True)
+    user_address = Column(String, index=True)
+    icon = Column(String)
+    text = Column(String)
+    link = Column(String)
+    lat = Column(String)
+    lng = Column(String)
+    status = Column(String, default="pending") # pending, approved, rejected
+    expiry_date = Column(DateTime, nullable=True)
+
+class Plot(Base):
+    __tablename__ = "plots"
+    id = Column(String, primary_key=True, index=True)
+    owner_address = Column(String, index=True)
+    purchased_at = Column(DateTime, default=datetime.utcnow)
+
+Base.metadata.create_all(bind=engine)
+
+# Migration: Add expiry_date column if it doesn't exist
+with engine.connect() as conn:
+    try:
+        conn.execute(text("ALTER TABLE ads ADD COLUMN expiry_date DATETIME"))
+        conn.commit()
+    except Exception:
+        # Column likely already exists
+        pass
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# Models
+class AdCreate(BaseModel):
+    user_address: str
+    icon: str
+    text: str
+    link: str
+    lat: str
+    lng: str
+
+class PlotClaim(BaseModel):
+    id: str
+
+OWNER_ADDRESS = os.getenv("OWNER_ADDRESS", "0x5D1550A94f2330008E7fE475745AEb3098ECc210").lower()
+
+def verify_admin_signature(x_signature: str = Header(...), x_message: str = Header(...)):
+    try:
+        message = encode_defunct(text=x_message)
+        recovered_address = w3.eth.account.recover_message(message, signature=x_signature)
+        if recovered_address.lower() != OWNER_ADDRESS:
+            raise HTTPException(status_code=403, detail="Not authorized")
+        return recovered_address
+    except Exception:
+        raise HTTPException(status_code=403, detail="Invalid signature")
+
+@app.post("/ads")
+def submit_ad(ad: AdCreate, db: Session = Depends(get_db)):
+    db_ad = Ad(**ad.dict())
+    db.add(db_ad)
+    db.commit()
+    db.refresh(db_ad)
+    return {"message": "Ad submitted successfully, pending approval.", "ad": db_ad}
+
+@app.get("/ads")
+def get_approved_ads(db: Session = Depends(get_db)):
+    now = datetime.utcnow()
+    return db.query(Ad).filter(
+        Ad.status == "approved",
+        (Ad.expiry_date == None) | (Ad.expiry_date > now)
+    ).all()
+
+@app.get("/plots")
+def get_plots(db: Session = Depends(get_db)):
+    return db.query(Plot).all()
+
+@app.get("/users/{address}/plots")
+def get_user_plots(address: str, db: Session = Depends(get_db)):
+    return db.query(Plot).filter(Plot.owner_address.ilike(address)).all()
+
+@app.get("/users/{address}/ads")
+def get_user_ads(address: str, db: Session = Depends(get_db)):
+    return db.query(Ad).filter(Ad.user_address.ilike(address)).all()
+
+@app.post("/admin/plots/claim")
+def claim_plot(plot: PlotClaim, db: Session = Depends(get_db), admin: str = Depends(verify_admin_signature)):
+    db_plot = db.query(Plot).filter(Plot.id == plot.id).first()
+    if db_plot:
+        db_plot.owner_address = admin
+    else:
+        db_plot = Plot(id=plot.id, owner_address=admin)
+        db.add(db_plot)
+    db.commit()
+    return {"message": "Plot claimed by admin successfully"}
+
+@app.get("/admin/ads")
+def get_pending_ads(db: Session = Depends(get_db), admin: str = Depends(verify_admin_signature)):
+    return db.query(Ad).filter(Ad.status == "pending").all()
+
+@app.get("/admin/ads/all")
+def get_all_ads(db: Session = Depends(get_db), admin: str = Depends(verify_admin_signature)):
+    return db.query(Ad).all()
+
+@app.post("/admin/ads/{ad_id}/approve")
+def approve_ad(ad_id: int, db: Session = Depends(get_db), admin: str = Depends(verify_admin_signature)):
+    ad = db.query(Ad).filter(Ad.id == ad_id).first()
+    if not ad:
+        raise HTTPException(status_code=404, detail="Ad not found")
+    ad.status = "approved"
+    ad.expiry_date = datetime.utcnow() + timedelta(days=30)
+    db.commit()
+    return {"message": "Ad approved", "expiry_date": ad.expiry_date}
+    
+@app.post("/admin/ads/{ad_id}/reject")
+def reject_ad(ad_id: int, db: Session = Depends(get_db), admin: str = Depends(verify_admin_signature)):
+    ad = db.query(Ad).filter(Ad.id == ad_id).first()
+    if not ad:
+        raise HTTPException(status_code=404, detail="Ad not found")
+    ad.status = "rejected"
+    db.commit()
+    return {"message": "Ad rejected"}
+
+@app.delete("/ads/plot/{lat}/{lng}")
+def delete_ad_by_plot(lat: str, lng: str, db: Session = Depends(get_db)):
+    # Delete ads for this plot when ownership changes
+    ads = db.query(Ad).filter(Ad.lat == lat, Ad.lng == lng).all()
+    for ad in ads:
+        db.delete(ad)
+    db.commit()
+    return {"message": f"Deleted {len(ads)} ads for plot at {lat}, {lng}"}
