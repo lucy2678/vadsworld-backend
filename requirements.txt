@@ -3,3 +3,6 @@ uvicorn
 sqlalchemy
 pydantic
 web3
+psycopg2-binary==2.9.9
+sqlalchemy
+
