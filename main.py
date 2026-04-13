@@ -114,8 +114,8 @@ def sync_plots(db: Session = Depends(get_db)):
         contract = w3_instance.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=CONTRACT_ABI)
         
         try:
-            mint_events = contract.events.LandMinted.get_logs(from_block=0, to_block='latest')
-            transfer_events = contract.events.Transfer.get_logs(from_block=0, to_block='latest')
+            mint_events = contract.events.LandMinted.get_logs(from_block=90744785, to_block='latest')
+            transfer_events = contract.events.Transfer.get_logs(from_block=90744785, to_block='latest')
         except Exception as e:
             latest_block = w3_instance.eth.block_number
             start_block = max(0, latest_block - 4900)
