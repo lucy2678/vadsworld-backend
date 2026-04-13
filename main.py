@@ -72,7 +72,7 @@ with engine.connect() as conn:
 
 from web3 import Web3
 
-BSC_RPC_URL = "https://bsc-dataseed.binance.org/"
+BSC_RPC_URL = "https://binance.llamarpc.com"
 CONTRACT_ADDRESS = "0xeb85d16502bd603749fA8774d0d4717e324e0850"
 
 # Minimal ABI for the events we need
@@ -113,8 +113,24 @@ def sync_plots(db: Session = Depends(get_db)):
         w3_instance = Web3(Web3.HTTPProvider(BSC_RPC_URL))
         contract = w3_instance.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=CONTRACT_ABI)
         
-        mint_events = contract.events.LandMinted.get_logs(from_block=90744785, to_block='latest')
-        transfer_events = contract.events.Transfer.get_logs(from_block=90744785, to_block='latest')
+        START_BLOCK = 90744785
+        CHUNK_SIZE = 40000
+        latest_block = w3_instance.eth.block_number
+        
+        mint_events = []
+        transfer_events = []
+        
+        current_block = START_BLOCK
+        while current_block <= latest_block:
+            end_block = min(current_block + CHUNK_SIZE - 1, latest_block)
+            
+            chunk_mint_events = contract.events.LandMinted.get_logs(from_block=current_block, to_block=end_block)
+            chunk_transfer_events = contract.events.Transfer.get_logs(from_block=current_block, to_block=end_block)
+            
+            mint_events.extend(chunk_mint_events)
+            transfer_events.extend(chunk_transfer_events)
+            
+            current_block = end_block + 1
 
         token_coords = {}
         for event in mint_events:
