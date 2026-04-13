@@ -21,7 +21,7 @@ app.add_middleware(
 )
 
 # Database Setup
-SQLALCHEMY_DATABASE_URL = "sqlite:///./vadsworld.db"
+SQLALCHEMY_DATABASE_URL = "sqlite:////app/data/vadsworld.db"
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -69,12 +69,96 @@ with engine.connect() as conn:
     except Exception:
         pass
 
+from web3 import Web3
+
+BSC_RPC_URL = "https://bsc-dataseed.binance.org/"
+CONTRACT_ADDRESS = "0xeb85d16502bd603749fA8774d0d4717e324e0850"
+
+# Minimal ABI for the events we need
+CONTRACT_ABI = [
+    {
+        "anonymous": False,
+        "inputs": [
+            {"indexed": True, "internalType": "uint256", "name": "tokenId", "type": "uint256"},
+            {"indexed": False, "internalType": "int256", "name": "x", "type": "int256"},
+            {"indexed": False, "internalType": "int256", "name": "y", "type": "int256"},
+            {"indexed": False, "internalType": "string", "name": "country", "type": "string"}
+        ],
+        "name": "LandMinted",
+        "type": "event"
+    },
+    {
+        "anonymous": False,
+        "inputs": [
+            {"indexed": True, "internalType": "address", "name": "from", "type": "address"},
+            {"indexed": True, "internalType": "address", "name": "to", "type": "address"},
+            {"indexed": True, "internalType": "uint256", "name": "tokenId", "type": "uint256"}
+        ],
+        "name": "Transfer",
+        "type": "event"
+    }
+]
+
 def get_db():
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
+
+@app.post("/sync-plots")
+def sync_plots(db: Session = Depends(get_db)):
+    try:
+        w3_instance = Web3(Web3.HTTPProvider(BSC_RPC_URL))
+        contract = w3_instance.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=CONTRACT_ABI)
+        
+        try:
+            mint_events = contract.events.LandMinted.get_logs(fromBlock=0, toBlock='latest')
+            transfer_events = contract.events.Transfer.get_logs(fromBlock=0, toBlock='latest')
+        except Exception as e:
+            latest_block = w3_instance.eth.block_number
+            start_block = max(0, latest_block - 4900)
+            mint_events = contract.events.LandMinted.get_logs(fromBlock=start_block, toBlock='latest')
+            transfer_events = contract.events.Transfer.get_logs(fromBlock=start_block, toBlock='latest')
+
+        token_coords = {}
+        for event in mint_events:
+            token_id = event['args']['tokenId']
+            x = event['args']['x']
+            y = event['args']['y']
+            lng = x / 100000.0
+            lat = y / 100000.0
+            string_id = f"{lng:.5f}_{lat:.5f}"
+            token_coords[token_id] = string_id
+            
+        token_owners = {}
+        for event in transfer_events:
+            token_id = event['args']['tokenId']
+            to_addr = event['args']['to']
+            token_owners[token_id] = to_addr
+            
+        added_count = 0
+        updated_count = 0
+        
+        for token_id, string_id in token_coords.items():
+            owner = token_owners.get(token_id)
+            if not owner:
+                continue
+                
+            db_plot = db.query(Plot).filter(Plot.id == string_id).first()
+            if not db_plot:
+                new_plot = Plot(id=string_id, owner_address=owner.lower())
+                db.add(new_plot)
+                added_count += 1
+            elif db_plot.owner_address.lower() != owner.lower():
+                db_plot.owner_address = owner.lower()
+                updated_count += 1
+                
+        db.commit()
+        return {"message": f"Sync complete. Added {added_count} plots, updated {updated_count} plots."}
+    except Exception as e:
+        print(f"Sync error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # Models
 class AdCreate(BaseModel):
