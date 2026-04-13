@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker, Session
 from eth_account.messages import encode_defunct
 from web3.auto import w3
 import os
+import time
 from datetime import datetime, timedelta
 
 app = FastAPI(title="VadsWorld API")
@@ -114,7 +115,7 @@ def sync_plots(db: Session = Depends(get_db)):
         contract = w3_instance.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=CONTRACT_ABI)
         
         START_BLOCK = 90744785
-        CHUNK_SIZE = 40000
+        CHUNK_SIZE = 5000
         latest_block = w3_instance.eth.block_number
         
         mint_events = []
@@ -131,6 +132,7 @@ def sync_plots(db: Session = Depends(get_db)):
             transfer_events.extend(chunk_transfer_events)
             
             current_block = end_block + 1
+            time.sleep(0.2)
 
         token_coords = {}
         for event in mint_events:
