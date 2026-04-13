@@ -10,6 +10,10 @@ import os
 import time
 from datetime import datetime, timedelta
 
+import force_sync
+# და იქვე, import-ების ქვემოთ გამოიძახე ფუნქცია
+force_sync.run_force_sync()
+
 app = FastAPI(title="VadsWorld API")
 
 # Configure CORS

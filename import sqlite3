@@ -1,0 +1,46 @@
+import sqlite3
+import os
+from datetime import datetime
+
+def run_force_sync():
+    db_path = "/app/data/vadsworld.db"
+    
+    # Ensure directory exists
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    
+    # Connect to the SQLite database
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    # Ensure the table exists (matches the SQLAlchemy model)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS plots (
+            id VARCHAR PRIMARY KEY,
+            owner_address VARCHAR,
+            purchased_at DATETIME,
+            is_for_sale BOOLEAN,
+            price_vim INTEGER
+        )
+    ''')
+    
+    owner = "0x5D1550A94f2330008E7fE475745AEb3098ECc210".lower()
+    now = datetime.utcnow().isoformat()
+    
+    # The user requested Plot ID 151 and 152
+    # Note: The column in the database is named 'id' (not 'plot_id')
+    plots_to_insert = [
+        ("151", owner, now, False, 0),
+        ("152", owner, now, False, 0)
+    ]
+    
+    cursor.executemany('''
+        INSERT OR REPLACE INTO plots (id, owner_address, purchased_at, is_for_sale, price_vim)
+        VALUES (?, ?, ?, ?, ?)
+    ''', plots_to_insert)
+    
+    conn.commit()
+    conn.close()
+    print("Force sync completed: Inserted plots 151 and 152 manually.")
+
+if __name__ == "__main__":
+    run_force_sync()
