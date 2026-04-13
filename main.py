@@ -73,7 +73,7 @@ with engine.connect() as conn:
 
 from web3 import Web3
 
-BSC_RPC_URL = "https://rpc.ankr.com/bsc"
+BSC_RPC_URL = "https://bsc-dataseed.binance.org/"
 CONTRACT_ADDRESS = "0xeb85d16502bd603749fA8774d0d4717e324e0850"
 
 # Minimal ABI for the events we need
