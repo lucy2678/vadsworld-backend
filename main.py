@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, text
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from eth_account.messages import encode_defunct
@@ -55,6 +55,18 @@ with engine.connect() as conn:
         conn.commit()
     except Exception:
         # Column likely already exists
+        pass
+    
+    try:
+        conn.execute(text("ALTER TABLE plots ADD COLUMN is_for_sale BOOLEAN DEFAULT 0"))
+        conn.commit()
+    except Exception:
+        pass
+
+    try:
+        conn.execute(text("ALTER TABLE plots ADD COLUMN price_vim INTEGER DEFAULT 0"))
+        conn.commit()
+    except Exception:
         pass
 
 def get_db():
