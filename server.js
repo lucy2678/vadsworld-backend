@@ -44,9 +44,16 @@ const db = new sqlite3.Database(dbPath, (err) => {
     db.run(`CREATE TABLE IF NOT EXISTS plots (
       id TEXT PRIMARY KEY,
       owner_address TEXT,
-      purchased_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      purchased_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      is_for_sale BOOLEAN DEFAULT 0,
+      price_vim INTEGER DEFAULT 0
     )`, (err) => {
       if (err) console.error('Error creating plots table', err.message);
+      else {
+        // Migration for existing databases
+        db.run(`ALTER TABLE plots ADD COLUMN is_for_sale BOOLEAN DEFAULT 0`, (err) => {});
+        db.run(`ALTER TABLE plots ADD COLUMN price_vim INTEGER DEFAULT 0`, (err) => {});
+      }
     });
   }
 });
@@ -105,9 +112,19 @@ app.get('/plots', (req, res) => {
 
 app.post('/plots/buy', (req, res) => {
   const { id, owner_address } = req.body;
-  db.run(`INSERT OR REPLACE INTO plots (id, owner_address) VALUES (?, ?)`, [id, owner_address], function(err) {
+  db.run(`INSERT OR REPLACE INTO plots (id, owner_address, is_for_sale, price_vim) VALUES (?, ?, 0, 0)`, [id, owner_address], function(err) {
     if (err) return res.status(500).json({ detail: err.message });
     res.json({ message: "Plot purchased successfully" });
+  });
+});
+
+app.post('/plots/sell', (req, res) => {
+  const { id, owner_address, price_vim } = req.body;
+  // Verify owner_address matches before updating
+  db.run(`UPDATE plots SET is_for_sale = 1, price_vim = ? WHERE id = ? AND owner_address = ?`, [price_vim, id, owner_address], function(err) {
+    if (err) return res.status(500).json({ detail: err.message });
+    if (this.changes === 0) return res.status(404).json({ detail: "Plot not found or you don't own it" });
+    res.json({ message: "Plot listed for sale successfully" });
   });
 });
 

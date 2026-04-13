@@ -21,18 +21,8 @@ app.add_middleware(
 )
 
 # Database Setup
-SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./vadsworld.db")
-
-# Fix for newer SQLAlchemy versions that require 'postgresql://' instead of 'postgres://'
-if SQLALCHEMY_DATABASE_URL.startswith("postgres://"):
-    SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace("postgres://", "postgresql://", 1)
-
-# SQLite requires check_same_thread=False, but PostgreSQL doesn't support it
-if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
-    engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
-else:
-    engine = create_engine(SQLALCHEMY_DATABASE_URL)
-
+SQLALCHEMY_DATABASE_URL = "sqlite:///./vadsworld.db"
+engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -53,6 +43,8 @@ class Plot(Base):
     id = Column(String, primary_key=True, index=True)
     owner_address = Column(String, index=True)
     purchased_at = Column(DateTime, default=datetime.utcnow)
+    is_for_sale = Column(Boolean, default=False)
+    price_vim = Column(Integer, default=0)
 
 Base.metadata.create_all(bind=engine)
 
@@ -83,6 +75,11 @@ class AdCreate(BaseModel):
 
 class PlotClaim(BaseModel):
     id: str
+
+class PlotSell(BaseModel):
+    id: str
+    owner_address: str
+    price_vim: int
 
 OWNER_ADDRESS = os.getenv("OWNER_ADDRESS", "0x5D1550A94f2330008E7fE475745AEb3098ECc210").lower()
 
@@ -123,6 +120,17 @@ def get_user_plots(address: str, db: Session = Depends(get_db)):
 @app.get("/users/{address}/ads")
 def get_user_ads(address: str, db: Session = Depends(get_db)):
     return db.query(Ad).filter(Ad.user_address.ilike(address)).all()
+
+@app.post("/plots/sell")
+def sell_plot(plot_sell: PlotSell, db: Session = Depends(get_db)):
+    db_plot = db.query(Plot).filter(Plot.id == plot_sell.id, Plot.owner_address.ilike(plot_sell.owner_address)).first()
+    if not db_plot:
+        raise HTTPException(status_code=404, detail="Plot not found or you don't own it")
+    
+    db_plot.is_for_sale = True
+    db_plot.price_vim = plot_sell.price_vim
+    db.commit()
+    return {"message": "Plot listed for sale successfully"}
 
 @app.post("/admin/plots/claim")
 def claim_plot(plot: PlotClaim, db: Session = Depends(get_db), admin: str = Depends(verify_admin_signature)):
