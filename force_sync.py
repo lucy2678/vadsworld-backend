@@ -26,16 +26,10 @@ def run_force_sync():
     owner = "0x5D1550A94f2330008E7fE475745AEb3098ECc210".lower()
     now = datetime.utcnow().isoformat()
     
-    # We need to insert the actual coordinate strings.
-    # If the user bought plots in Tbilisi, let's use some coordinates there.
-    # Or we can just use the coordinates from the screenshot if we had them.
-    # Let's use two adjacent plots in Tbilisi: 44.78330_41.71660 and 44.78330_41.71661
-    # Wait, the grid size is 0.0001.
-    # Let's use 44.78330_41.71660 and 44.78340_41.71660
-    
+    # The real coordinates for Token IDs 1624772223 and 451886890
     plots_to_insert = [
-        ("44.78330_41.71660", owner, now, False, 0),
-        ("44.78340_41.71660", owner, now, False, 0)
+        ("41.59869_41.62302", owner, now, False, 0),
+        ("41.59882_41.62302", owner, now, False, 0)
     ]
     
     cursor.executemany('''
@@ -44,7 +38,7 @@ def run_force_sync():
     ''', plots_to_insert)
     
     # Delete the old invalid entries
-    cursor.execute("DELETE FROM plots WHERE id IN ('151', '152')")
+    cursor.execute("DELETE FROM plots WHERE id IN ('151', '152', '44.78330_41.71660', '44.78340_41.71660')")
     
     conn.commit()
     conn.close()
