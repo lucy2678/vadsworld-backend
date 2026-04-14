@@ -51,6 +51,7 @@ class Plot(Base):
     purchased_at = Column(DateTime, default=datetime.utcnow)
     is_for_sale = Column(Boolean, default=False)
     price_vim = Column(Integer, default=0)
+    is_vip = Column(Boolean, default=False)
 
 Base.metadata.create_all(bind=engine)
 
@@ -75,24 +76,19 @@ with engine.connect() as conn:
     except Exception:
         pass
 
+    try:
+        conn.execute(text("ALTER TABLE plots ADD COLUMN is_vip BOOLEAN DEFAULT 0"))
+        conn.commit()
+    except Exception:
+        pass
+
 from web3 import Web3
 
 BSC_RPC_URL = "https://bsc-dataseed.binance.org/"
-CONTRACT_ADDRESS = "0xeb85d16502bd603749fA8774d0d4717e324e0850"
+CONTRACT_ADDRESS = "0x509d779e25a0E93251DD775739aD0380430bc86c"
 
 # Minimal ABI for the events we need
 CONTRACT_ABI = [
-    {
-        "anonymous": False,
-        "inputs": [
-            {"indexed": True, "internalType": "uint256", "name": "tokenId", "type": "uint256"},
-            {"indexed": False, "internalType": "int256", "name": "x", "type": "int256"},
-            {"indexed": False, "internalType": "int256", "name": "y", "type": "int256"},
-            {"indexed": False, "internalType": "string", "name": "country", "type": "string"}
-        ],
-        "name": "LandMinted",
-        "type": "event"
-    },
     {
         "anonymous": False,
         "inputs": [
@@ -118,11 +114,10 @@ def sync_plots(db: Session = Depends(get_db)):
         w3_instance = Web3(Web3.HTTPProvider(BSC_RPC_URL))
         contract = w3_instance.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=CONTRACT_ABI)
         
-        START_BLOCK = 90744785
-        CHUNK_SIZE = 500
+        START_BLOCK = 47000000 # Update to a recent block or the deployment block of the new contract
+        CHUNK_SIZE = 5000
         latest_block = w3_instance.eth.block_number
         
-        mint_events = []
         transfer_events = []
         
         current_block = START_BLOCK
@@ -130,25 +125,13 @@ def sync_plots(db: Session = Depends(get_db)):
             end_block = min(current_block + CHUNK_SIZE - 1, latest_block)
             print(f"Current Sync: {current_block} to {end_block}...")
             
-            chunk_mint_events = contract.events.LandMinted.get_logs(from_block=current_block, to_block=end_block)
             chunk_transfer_events = contract.events.Transfer.get_logs(from_block=current_block, to_block=end_block)
             
-            mint_events.extend(chunk_mint_events)
             transfer_events.extend(chunk_transfer_events)
             
             current_block = end_block + 1
-            time.sleep(5.0)
+            time.sleep(1.0)
 
-        token_coords = {}
-        for event in mint_events:
-            token_id = event['args']['tokenId']
-            x = event['args']['x']
-            y = event['args']['y']
-            lng = x / 100000.0
-            lat = y / 100000.0
-            string_id = f"{lng:.5f}_{lat:.5f}"
-            token_coords[token_id] = string_id
-            
         token_owners = {}
         for event in transfer_events:
             token_id = event['args']['tokenId']
@@ -158,11 +141,11 @@ def sync_plots(db: Session = Depends(get_db)):
         added_count = 0
         updated_count = 0
         
-        for token_id, string_id in token_coords.items():
-            owner = token_owners.get(token_id)
-            if not owner:
+        for token_id, owner in token_owners.items():
+            if not owner or owner == "0x0000000000000000000000000000000000000000":
                 continue
                 
+            string_id = str(token_id)
             db_plot = db.query(Plot).filter(Plot.id == string_id).first()
             if not db_plot:
                 new_plot = Plot(id=string_id, owner_address=owner.lower())
@@ -189,6 +172,10 @@ class AdCreate(BaseModel):
 
 class PlotClaim(BaseModel):
     id: str
+
+class FiatPurchase(BaseModel):
+    id: str
+    owner_address: str
 
 class PlotSell(BaseModel):
     id: str
@@ -245,6 +232,18 @@ def sell_plot(plot_sell: PlotSell, db: Session = Depends(get_db)):
     db_plot.price_vim = plot_sell.price_vim
     db.commit()
     return {"message": "Plot listed for sale successfully"}
+
+@app.post("/plots/fiat-purchase")
+def fiat_purchase(purchase: FiatPurchase, db: Session = Depends(get_db)):
+    db_plot = db.query(Plot).filter(Plot.id == purchase.id).first()
+    if db_plot:
+        db_plot.owner_address = purchase.owner_address
+        db_plot.is_for_sale = False
+    else:
+        db_plot = Plot(id=purchase.id, owner_address=purchase.owner_address, is_for_sale=False)
+        db.add(db_plot)
+    db.commit()
+    return {"message": "Plot assigned successfully"}
 
 @app.post("/admin/plots/claim")
 def claim_plot(plot: PlotClaim, db: Session = Depends(get_db), admin: str = Depends(verify_admin_signature)):
