@@ -110,11 +110,41 @@ app.get('/plots', (req, res) => {
   });
 });
 
+app.get('/users/:address/plots', (req, res) => {
+  const address = req.params.address.toLowerCase();
+  db.all(`SELECT * FROM plots WHERE lower(owner_address) = ?`, [address], (err, rows) => {
+    if (err) return res.status(500).json({ detail: err.message });
+    res.json(rows);
+  });
+});
+
+app.get('/users/:address/ads', (req, res) => {
+  const address = req.params.address.toLowerCase();
+  db.all(`SELECT * FROM ads WHERE lower(user_address) = ?`, [address], (err, rows) => {
+    if (err) return res.status(500).json({ detail: err.message });
+    res.json(rows);
+  });
+});
+
+app.post('/sync-plots', (req, res) => {
+  // Simple check or default seed
+  db.run(`INSERT OR IGNORE INTO plots (id, owner_address) VALUES (?, ?)`, ["41.59905_41.62325", OWNER_ADDRESS]);
+  res.json({ message: "Sync complete! Check your dashboard." });
+});
+
 app.post('/plots/buy', (req, res) => {
   const { id, owner_address } = req.body;
   db.run(`INSERT OR REPLACE INTO plots (id, owner_address, is_for_sale, price_vim) VALUES (?, ?, 0, 0)`, [id, owner_address], function(err) {
     if (err) return res.status(500).json({ detail: err.message });
     res.json({ message: "Plot purchased successfully" });
+  });
+});
+
+app.post('/plots/fiat-purchase', (req, res) => {
+  const { id, owner_address } = req.body;
+  db.run(`INSERT OR REPLACE INTO plots (id, owner_address, is_for_sale, price_vim) VALUES (?, ?, 0, 0)`, [id, owner_address], function(err) {
+    if (err) return res.status(500).json({ detail: err.message });
+    res.json({ message: "Fiat purchase recorded successfully" });
   });
 });
 
@@ -144,6 +174,31 @@ app.get('/admin/ads', verifyAdminSignature, (req, res) => {
       return res.status(500).json({ detail: err.message });
     }
     res.json(rows);
+  });
+});
+
+app.get('/admin/ads/all', verifyAdminSignature, (req, res) => {
+  const query = `SELECT * FROM ads ORDER BY id DESC`;
+  db.all(query, [], (err, rows) => {
+    if (err) {
+      return res.status(500).json({ detail: err.message });
+    }
+    res.json(rows);
+  });
+});
+
+app.post('/admin/plots/:id/mint', verifyAdminSignature, (req, res) => {
+  const plotId = req.params.id;
+  db.run(`UPDATE plots SET is_minted = 1 WHERE id = ?`, [plotId], function(err) {
+    if (err) return res.status(500).json({ detail: err.message });
+    res.json({ message: "Plot marked as minted" });
+  });
+});
+
+app.post('/admin/plots/clear', verifyAdminSignature, (req, res) => {
+  db.run(`DELETE FROM plots`, (err) => {
+    if (err) return res.status(500).json({ detail: err.message });
+    res.json({ message: "Plots cache cleared" });
   });
 });
 
