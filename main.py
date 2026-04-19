@@ -80,7 +80,13 @@ with engine.connect() as conn:
 
 from web3 import Web3
 
-BSC_RPC_URL = "https://binance.llamarpc.com"
+BSC_RPC_URLS = [
+    "https://bsc-dataseed.binance.org",
+    "https://bsc-dataseed1.defibit.io",
+    "https://bsc-dataseed1.ninicoin.io",
+    "https://binance.llamarpc.com"
+]
+
 CONTRACT_ADDRESS = "0x509d779e25a0E93251DD775739aD0380430bc86c"
 
 # Minimal ABI for the events we need
@@ -104,10 +110,26 @@ def get_db():
     finally:
         db.close()
 
+def get_w3():
+    for url in BSC_RPC_URLS:
+        try:
+            w3 = Web3(Web3.HTTPProvider(url, request_kwargs={'timeout': 10}))
+            if w3.is_connected():
+                return w3, url
+        except Exception as e:
+            print(f"Failed to connect to RPC {url}: {e}")
+            continue
+    return None, None
+
 @app.post("/sync-plots")
 def sync_plots(db: Session = Depends(get_db)):
     try:
-        w3_instance = Web3(Web3.HTTPProvider(BSC_RPC_URL))
+        w3_instance, active_rpc = get_w3()
+        if not w3_instance:
+            raise HTTPException(status_code=500, detail="Could not connect to any BSC RPC nodes")
+            
+        print(f"Connected to RPC: {active_rpc}")
+        
         # Ensure contract address is checksummed
         check_addr = Web3.to_checksum_address(CONTRACT_ADDRESS)
         contract = w3_instance.eth.contract(address=check_addr, abi=CONTRACT_ABI)
@@ -116,14 +138,21 @@ def sync_plots(db: Session = Depends(get_db)):
         START_BLOCK = 92487000 
         latest_block = w3_instance.eth.block_number
         
-        # Limit sync range to avoid timeouts (search up to 200k blocks from START_BLOCK)
-        MAX_BLOCKS = 200000
-        sync_end = min(latest_block, START_BLOCK + MAX_BLOCKS)
+        print(f"Latest block: {latest_block}")
         
-        CHUNK_SIZE = 5000 # Smaller chunks are more likely to be accepted by public RPCs
+        # Scan in chunks up to latest_block
+        CHUNK_SIZE = 5000 
         transfer_events = []
         
         current_block = START_BLOCK
+        # We can scan up to latest_block, but let's be reasonable for a web request.
+        # If the gap is too large, we might need a background task.
+        # For now, let's scan up to 50,000 blocks per request if it's too much,
+        # or just try to scan everything if it's not millions of blocks.
+        
+        MAX_SCAN = 500000 # Increased scan limit
+        sync_end = min(latest_block, START_BLOCK + MAX_SCAN)
+        
         while current_block <= sync_end:
             end_block = min(current_block + CHUNK_SIZE - 1, sync_end)
             print(f"Syncing blocks {current_block} to {end_block}...")
@@ -133,12 +162,21 @@ def sync_plots(db: Session = Depends(get_db)):
                 transfer_events.extend(chunk_events)
             except Exception as e:
                 print(f"Error getting logs for range {current_block}-{end_block}: {e}")
-                # If a chunk fails, we could retry with smaller size or just skip/break
-                # For now let's try to continue after a short sleep
-                time.sleep(2)
+                # Retry once with smaller chunk if it failed
+                try:
+                    time.sleep(1)
+                    mid_block = current_block + (CHUNK_SIZE // 2)
+                    chunk_events1 = contract.events.Transfer.get_logs(from_block=current_block, to_block=mid_block)
+                    chunk_events2 = contract.events.Transfer.get_logs(from_block=mid_block + 1, to_block=end_block)
+                    transfer_events.extend(chunk_events1)
+                    transfer_events.extend(chunk_events2)
+                except Exception as e2:
+                    print(f"Retry failed for {current_block}-{end_block}: {e2}")
             
             current_block = end_block + 1
-            time.sleep(0.5)
+            # Add a small delay if we're doing many chunks to respect public rate limits
+            if len(transfer_events) % (CHUNK_SIZE * 4) == 0:
+                time.sleep(0.5)
 
         token_owners = {}
         for event in transfer_events:
