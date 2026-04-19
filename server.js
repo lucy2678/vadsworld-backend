@@ -6,7 +6,7 @@ const { ethers } = require('ethers');
 const path = require('path');
 
 const app = express();
-const port = 8000;
+const port = 3000;
 
 app.use(cors());
 app.use(bodyParser.json());
@@ -32,7 +32,6 @@ const db = new sqlite3.Database(dbPath, (err) => {
       if (err) {
         console.error('Error creating ads table', err.message);
       } else {
-        // Migration: Add expiry_date column if it doesn't exist (for existing databases)
         db.run(`ALTER TABLE ads ADD COLUMN expiry_date DATETIME`, (err) => {
           if (err && !err.message.includes('duplicate column name')) {
             // Ignore if column already exists
@@ -46,13 +45,14 @@ const db = new sqlite3.Database(dbPath, (err) => {
       owner_address TEXT,
       purchased_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       is_for_sale BOOLEAN DEFAULT 0,
-      price_vim INTEGER DEFAULT 0
+      price_vim INTEGER DEFAULT 0,
+      is_minted BOOLEAN DEFAULT 0
     )`, (err) => {
       if (err) console.error('Error creating plots table', err.message);
       else {
-        // Migration for existing databases
         db.run(`ALTER TABLE plots ADD COLUMN is_for_sale BOOLEAN DEFAULT 0`, (err) => {});
         db.run(`ALTER TABLE plots ADD COLUMN price_vim INTEGER DEFAULT 0`, (err) => {});
+        db.run(`ALTER TABLE plots ADD COLUMN is_minted BOOLEAN DEFAULT 0`, (err) => {});
       }
     });
   }
@@ -81,7 +81,13 @@ const verifyAdminSignature = (req, res, next) => {
   }
 };
 
-app.post('/ads', (req, res) => {
+// Serve static files from the 'out' directory
+app.use(express.static(path.join(__dirname, '../out')));
+
+// API Routes (mounted under /api/v1)
+const apiRouter = express.Router();
+
+apiRouter.post('/ads', (req, res) => {
   const { user_address, icon, text, link, lat, lng } = req.body;
   const query = `INSERT INTO ads (user_address, icon, text, link, lat, lng, status) VALUES (?, ?, ?, ?, ?, ?, 'pending')`;
   db.run(query, [user_address, icon, text, link, lat, lng], function(err) {
@@ -92,7 +98,7 @@ app.post('/ads', (req, res) => {
   });
 });
 
-app.get('/ads', (req, res) => {
+apiRouter.get('/ads', (req, res) => {
   const now = new Date().toISOString();
   const query = `SELECT * FROM ads WHERE status = 'approved' AND (expiry_date IS NULL OR expiry_date > ?)`;
   db.all(query, [now], (err, rows) => {
@@ -103,14 +109,14 @@ app.get('/ads', (req, res) => {
   });
 });
 
-app.get('/plots', (req, res) => {
+apiRouter.get('/plots', (req, res) => {
   db.all(`SELECT * FROM plots`, [], (err, rows) => {
     if (err) return res.status(500).json({ detail: err.message });
     res.json(rows);
   });
 });
 
-app.get('/users/:address/plots', (req, res) => {
+apiRouter.get('/users/:address/plots', (req, res) => {
   const address = req.params.address.toLowerCase();
   db.all(`SELECT * FROM plots WHERE lower(owner_address) = ?`, [address], (err, rows) => {
     if (err) return res.status(500).json({ detail: err.message });
@@ -118,7 +124,7 @@ app.get('/users/:address/plots', (req, res) => {
   });
 });
 
-app.get('/users/:address/ads', (req, res) => {
+apiRouter.get('/users/:address/ads', (req, res) => {
   const address = req.params.address.toLowerCase();
   db.all(`SELECT * FROM ads WHERE lower(user_address) = ?`, [address], (err, rows) => {
     if (err) return res.status(500).json({ detail: err.message });
@@ -126,13 +132,12 @@ app.get('/users/:address/ads', (req, res) => {
   });
 });
 
-app.post('/sync-plots', (req, res) => {
-  // Simple check or default seed
+apiRouter.post('/sync-plots', (req, res) => {
   db.run(`INSERT OR IGNORE INTO plots (id, owner_address) VALUES (?, ?)`, ["41.59905_41.62325", OWNER_ADDRESS]);
   res.json({ message: "Sync complete! Check your dashboard." });
 });
 
-app.post('/plots/buy', (req, res) => {
+apiRouter.post('/plots/buy', (req, res) => {
   const { id, owner_address } = req.body;
   db.run(`INSERT OR REPLACE INTO plots (id, owner_address, is_for_sale, price_vim) VALUES (?, ?, 0, 0)`, [id, owner_address], function(err) {
     if (err) return res.status(500).json({ detail: err.message });
@@ -140,7 +145,7 @@ app.post('/plots/buy', (req, res) => {
   });
 });
 
-app.post('/plots/fiat-purchase', (req, res) => {
+apiRouter.post('/plots/fiat-purchase', (req, res) => {
   const { id, owner_address } = req.body;
   db.run(`INSERT OR REPLACE INTO plots (id, owner_address, is_for_sale, price_vim) VALUES (?, ?, 0, 0)`, [id, owner_address], function(err) {
     if (err) return res.status(500).json({ detail: err.message });
@@ -148,9 +153,8 @@ app.post('/plots/fiat-purchase', (req, res) => {
   });
 });
 
-app.post('/plots/sell', (req, res) => {
+apiRouter.post('/plots/sell', (req, res) => {
   const { id, owner_address, price_vim } = req.body;
-  // Verify owner_address matches before updating
   db.run(`UPDATE plots SET is_for_sale = 1, price_vim = ? WHERE id = ? AND owner_address = ?`, [price_vim, id, owner_address], function(err) {
     if (err) return res.status(500).json({ detail: err.message });
     if (this.changes === 0) return res.status(404).json({ detail: "Plot not found or you don't own it" });
@@ -158,16 +162,16 @@ app.post('/plots/sell', (req, res) => {
   });
 });
 
-app.post('/admin/plots/claim', verifyAdminSignature, (req, res) => {
+apiRouter.post('/admin/plots/claim', verifyAdminSignature, (req, res) => {
   const { id } = req.body;
-  const owner_address = req.admin; // The verified admin address
+  const owner_address = req.admin;
   db.run(`INSERT OR REPLACE INTO plots (id, owner_address) VALUES (?, ?)`, [id, owner_address], function(err) {
     if (err) return res.status(500).json({ detail: err.message });
     res.json({ message: "Plot claimed by admin successfully" });
   });
 });
 
-app.get('/admin/ads', verifyAdminSignature, (req, res) => {
+apiRouter.get('/admin/ads', verifyAdminSignature, (req, res) => {
   const query = `SELECT * FROM ads WHERE status = 'pending'`;
   db.all(query, [], (err, rows) => {
     if (err) {
@@ -177,7 +181,7 @@ app.get('/admin/ads', verifyAdminSignature, (req, res) => {
   });
 });
 
-app.get('/admin/ads/all', verifyAdminSignature, (req, res) => {
+apiRouter.get('/admin/ads/all', verifyAdminSignature, (req, res) => {
   const query = `SELECT * FROM ads ORDER BY id DESC`;
   db.all(query, [], (err, rows) => {
     if (err) {
@@ -187,7 +191,7 @@ app.get('/admin/ads/all', verifyAdminSignature, (req, res) => {
   });
 });
 
-app.post('/admin/plots/:id/mint', verifyAdminSignature, (req, res) => {
+apiRouter.post('/admin/plots/:id/mint', verifyAdminSignature, (req, res) => {
   const plotId = req.params.id;
   db.run(`UPDATE plots SET is_minted = 1 WHERE id = ?`, [plotId], function(err) {
     if (err) return res.status(500).json({ detail: err.message });
@@ -195,14 +199,14 @@ app.post('/admin/plots/:id/mint', verifyAdminSignature, (req, res) => {
   });
 });
 
-app.post('/admin/plots/clear', verifyAdminSignature, (req, res) => {
+apiRouter.post('/admin/plots/clear', verifyAdminSignature, (req, res) => {
   db.run(`DELETE FROM plots`, (err) => {
     if (err) return res.status(500).json({ detail: err.message });
     res.json({ message: "Plots cache cleared" });
   });
 });
 
-app.post('/admin/ads/:ad_id/approve', verifyAdminSignature, (req, res) => {
+apiRouter.post('/admin/ads/:ad_id/approve', verifyAdminSignature, (req, res) => {
   const adId = req.params.ad_id;
   const expiryDate = new Date();
   expiryDate.setDate(expiryDate.getDate() + 30);
@@ -217,7 +221,7 @@ app.post('/admin/ads/:ad_id/approve', verifyAdminSignature, (req, res) => {
   });
 });
 
-app.post('/admin/ads/:ad_id/reject', verifyAdminSignature, (req, res) => {
+apiRouter.post('/admin/ads/:ad_id/reject', verifyAdminSignature, (req, res) => {
   const adId = req.params.ad_id;
   const query = `UPDATE ads SET status = 'rejected' WHERE id = ?`;
   db.run(query, [adId], function(err) {
@@ -228,7 +232,7 @@ app.post('/admin/ads/:ad_id/reject', verifyAdminSignature, (req, res) => {
   });
 });
 
-app.delete('/ads/plot/:lat/:lng', (req, res) => {
+apiRouter.delete('/ads/plot/:lat/:lng', (req, res) => {
   const { lat, lng } = req.params;
   const query = `DELETE FROM ads WHERE lat = ? AND lng = ?`;
   db.run(query, [lat, lng], function(err) {
@@ -239,6 +243,13 @@ app.delete('/ads/plot/:lat/:lng', (req, res) => {
   });
 });
 
+app.use('/api/v1', apiRouter);
+
+// Fallback for SPA
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, '../out/index.html'));
+});
+
 app.listen(port, () => {
-  console.log(`VadsWorld API listening at http://localhost:${port}`);
+  console.log(`VadsWorld Full-Stack Server listening at port ${port}`);
 });
