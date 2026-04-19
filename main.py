@@ -134,35 +134,30 @@ def sync_plots(db: Session = Depends(get_db)):
         check_addr = Web3.to_checksum_address(CONTRACT_ADDRESS)
         contract = w3_instance.eth.contract(address=check_addr, abi=CONTRACT_ABI)
         
-        # Start from just before the first mint block (92487530)
-        START_BLOCK = 92487000 
+        # Start from a more realistic BSC block (e.g., around early 2024)
         latest_block = w3_instance.eth.block_number
         
-        print(f"Latest block: {latest_block}")
+        # Deep scan: Scan up to 1,000,000 blocks to find transactions within the last month+
+        # If START_BLOCK is too far back, we use it as a base.
+        MAX_TOTAL_SCAN = 1000000 
+        START_BLOCK = max(0, latest_block - MAX_TOTAL_SCAN)
         
-        # Scan in chunks up to latest_block
-        CHUNK_SIZE = 5000 
+        print(f"Latest block: {latest_block}, Scanning from: {START_BLOCK}")
+        
         transfer_events = []
-        
         current_block = START_BLOCK
-        # We can scan up to latest_block, but let's be reasonable for a web request.
-        # If the gap is too large, we might need a background task.
-        # For now, let's scan up to 50,000 blocks per request if it's too much,
-        # or just try to scan everything if it's not millions of blocks.
-        
-        MAX_SCAN = 500000 # Increased scan limit
-        sync_end = min(latest_block, START_BLOCK + MAX_SCAN)
+        sync_end = latest_block
+        CHUNK_SIZE = 5000 
         
         while current_block <= sync_end:
             end_block = min(current_block + CHUNK_SIZE - 1, sync_end)
-            print(f"Syncing blocks {current_block} to {end_block}...")
             
             try:
                 chunk_events = contract.events.Transfer.get_logs(from_block=current_block, to_block=end_block)
                 transfer_events.extend(chunk_events)
             except Exception as e:
-                print(f"Error getting logs for range {current_block}-{end_block}: {e}")
-                # Retry once with smaller chunk if it failed
+                print(f"Error fetching logs for range {current_block}-{end_block}: {e}")
+                # Retry with smaller chunk
                 try:
                     time.sleep(1)
                     mid_block = current_block + (CHUNK_SIZE // 2)
@@ -174,8 +169,8 @@ def sync_plots(db: Session = Depends(get_db)):
                     print(f"Retry failed for {current_block}-{end_block}: {e2}")
             
             current_block = end_block + 1
-            # Add a small delay if we're doing many chunks to respect public rate limits
-            if len(transfer_events) % (CHUNK_SIZE * 4) == 0:
+            # Rate limiting for public RPCs
+            if len(transfer_events) % (CHUNK_SIZE * 2) == 0:
                 time.sleep(0.5)
 
         token_owners = {}
@@ -194,8 +189,6 @@ def sync_plots(db: Session = Depends(get_db)):
             string_id = str(token_id)
             db_plot = db.query(Plot).filter(Plot.id == string_id).first()
             if not db_plot:
-                # Set a default position or similar if it's an NFT without coords?
-                # For NFT #1 it will just have ID "1"
                 new_plot = Plot(id=string_id, owner_address=owner.lower())
                 db.add(new_plot)
                 added_count += 1
@@ -204,7 +197,7 @@ def sync_plots(db: Session = Depends(get_db)):
                 updated_count += 1
                 
         db.commit()
-        return {"message": f"Sync complete. Found {len(transfer_events)} transfers. Added {added_count} plots, updated {updated_count} plots. Scanned up to {sync_end}."}
+        return {"message": f"Deep Sync complete. Scanned 1M blocks. Found {len(transfer_events)} transfers. DB now has {len(token_owners)} verified plots."}
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
