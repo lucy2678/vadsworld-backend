@@ -10,10 +10,6 @@ import os
 import time
 from datetime import datetime, timedelta
 
-import force_sync
-# და იქვე, import-ების ქვემოთ გამოიძახე ფუნქცია
-force_sync.run_force_sync()
-
 app = FastAPI(title="VadsWorld API")
 
 # Configure CORS
@@ -85,7 +81,7 @@ with engine.connect() as conn:
 from web3 import Web3
 
 BSC_RPC_URL = "https://bsc-dataseed.binance.org/"
-CONTRACT_ADDRESS = os.getenv("CONTRACT_ADDRESS", "0x509d779e25a0E93251DD775739aD0380430bc86c")
+CONTRACT_ADDRESS = "0x509d779e25a0E93251DD775739aD0380430bc86c"
 
 # Minimal ABI for the events we need
 CONTRACT_ABI = [
@@ -114,8 +110,9 @@ def sync_plots(db: Session = Depends(get_db)):
         w3_instance = Web3(Web3.HTTPProvider(BSC_RPC_URL))
         contract = w3_instance.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=CONTRACT_ABI)
         
-        START_BLOCK = 47000000 # Update to a recent block or the deployment block of the new contract
-        CHUNK_SIZE = 5000
+        # Using a block closer to the new contract deployment
+        START_BLOCK = 92480000 
+        CHUNK_SIZE = 10000
         latest_block = w3_instance.eth.block_number
         
         transfer_events = []
@@ -282,6 +279,16 @@ def reject_ad(ad_id: int, db: Session = Depends(get_db), admin: str = Depends(ve
     ad.status = "rejected"
     db.commit()
     return {"message": "Ad rejected"}
+
+@app.post("/admin/plots/clear")
+def clear_all_plots(db: Session = Depends(get_db), admin: str = Depends(verify_admin_signature)):
+    try:
+        db.execute(text("DELETE FROM plots"))
+        db.commit()
+        return {"message": "All plots cleared from database successfully"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/ads/plot/{lat}/{lng}")
 def delete_ad_by_plot(lat: str, lng: str, db: Session = Depends(get_db)):
