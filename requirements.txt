@@ -3,5 +3,3 @@ uvicorn
 sqlalchemy
 pydantic
 web3
-eth-account
-psycopg2-binary
