@@ -80,7 +80,7 @@ with engine.connect() as conn:
 
 from web3 import Web3
 
-BSC_RPC_URL = "https://bsc-dataseed.binance.org/"
+BSC_RPC_URL = "https://binance.llamarpc.com"
 CONTRACT_ADDRESS = "0x509d779e25a0E93251DD775739aD0380430bc86c"
 
 # Minimal ABI for the events we need
@@ -108,26 +108,37 @@ def get_db():
 def sync_plots(db: Session = Depends(get_db)):
     try:
         w3_instance = Web3(Web3.HTTPProvider(BSC_RPC_URL))
-        contract = w3_instance.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=CONTRACT_ABI)
+        # Ensure contract address is checksummed
+        check_addr = Web3.to_checksum_address(CONTRACT_ADDRESS)
+        contract = w3_instance.eth.contract(address=check_addr, abi=CONTRACT_ABI)
         
-        # Using a block closer to the new contract deployment
-        START_BLOCK = 92480000 
-        CHUNK_SIZE = 10000
+        # Start from just before the first mint block (92487530)
+        START_BLOCK = 92487000 
         latest_block = w3_instance.eth.block_number
         
+        # Limit sync range to avoid timeouts (search up to 200k blocks from START_BLOCK)
+        MAX_BLOCKS = 200000
+        sync_end = min(latest_block, START_BLOCK + MAX_BLOCKS)
+        
+        CHUNK_SIZE = 5000 # Smaller chunks are more likely to be accepted by public RPCs
         transfer_events = []
         
         current_block = START_BLOCK
-        while current_block <= latest_block:
-            end_block = min(current_block + CHUNK_SIZE - 1, latest_block)
-            print(f"Current Sync: {current_block} to {end_block}...")
+        while current_block <= sync_end:
+            end_block = min(current_block + CHUNK_SIZE - 1, sync_end)
+            print(f"Syncing blocks {current_block} to {end_block}...")
             
-            chunk_transfer_events = contract.events.Transfer.get_logs(from_block=current_block, to_block=end_block)
-            
-            transfer_events.extend(chunk_transfer_events)
+            try:
+                chunk_events = contract.events.Transfer.get_logs(from_block=current_block, to_block=end_block)
+                transfer_events.extend(chunk_events)
+            except Exception as e:
+                print(f"Error getting logs for range {current_block}-{end_block}: {e}")
+                # If a chunk fails, we could retry with smaller size or just skip/break
+                # For now let's try to continue after a short sleep
+                time.sleep(2)
             
             current_block = end_block + 1
-            time.sleep(1.0)
+            time.sleep(0.5)
 
         token_owners = {}
         for event in transfer_events:
@@ -145,6 +156,8 @@ def sync_plots(db: Session = Depends(get_db)):
             string_id = str(token_id)
             db_plot = db.query(Plot).filter(Plot.id == string_id).first()
             if not db_plot:
+                # Set a default position or similar if it's an NFT without coords?
+                # For NFT #1 it will just have ID "1"
                 new_plot = Plot(id=string_id, owner_address=owner.lower())
                 db.add(new_plot)
                 added_count += 1
@@ -153,10 +166,12 @@ def sync_plots(db: Session = Depends(get_db)):
                 updated_count += 1
                 
         db.commit()
-        return {"message": f"Sync complete. Added {added_count} plots, updated {updated_count} plots."}
+        return {"message": f"Sync complete. Found {len(transfer_events)} transfers. Added {added_count} plots, updated {updated_count} plots. Scanned up to {sync_end}."}
     except Exception as e:
-        print(f"Sync error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"Sync error: {error_details}")
+        raise HTTPException(status_code=500, detail=f"Backend Sync Error: {str(e)}")
 
 # Models
 class AdCreate(BaseModel):
