@@ -53,6 +53,13 @@ class Plot(Base):
     price_vim = Column(Integer, default=0)
     is_vip = Column(Boolean, default=False)
 
+class Referral(Base):
+    __tablename__ = "referrals"
+    id = Column(Integer, primary_key=True, index=True)
+    referrer_address = Column(String, index=True)
+    referee_address = Column(String, index=True, unique=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 Base.metadata.create_all(bind=engine)
 
 # Migration: Add expiry_date column if it doesn't exist
@@ -305,6 +312,59 @@ def claim_plot(plot: PlotClaim, db: Session = Depends(get_db), admin: str = Depe
         db.add(db_plot)
     db.commit()
     return {"message": "Plot claimed by admin successfully"}
+
+class ReferralCreate(BaseModel):
+    referrer_address: str
+    referee_address: str
+
+@app.post("/referrals")
+def record_referral(ref: ReferralCreate, db: Session = Depends(get_db)):
+    # Check if referee already has a referrer
+    existing = db.query(Referral).filter(Referral.referee_address.ilike(ref.referee_address)).first()
+    if existing:
+        return {"message": "Referral already recorded"}
+    
+    # Don't refer yourself
+    if ref.referrer_address.lower() == ref.referee_address.lower():
+        return {"message": "Cannot refer yourself"}
+
+    new_ref = Referral(
+        referrer_address=ref.referrer_address,
+        referee_address=ref.referee_address
+    )
+    db.add(new_ref)
+    db.commit()
+    return {"message": "Referral recorded successfully"}
+
+@app.get("/users/{address}/referrals")
+def get_referral_stats(address: str, db: Session = Depends(get_db)):
+    refs = db.query(Referral).filter(Referral.referrer_address.ilike(address)).all()
+    
+    output = []
+    purchased_count = 0
+    no_purchase_count = 0
+    
+    for r in refs:
+        # Check if this referee has any plots
+        has_plot = db.query(Plot).filter(Plot.owner_address.ilike(r.referee_address)).first() is not None
+        status = "Purchased" if has_plot else "No Purchase yet"
+        if has_plot:
+            purchased_count += 1
+        else:
+            no_purchase_count += 1
+            
+        output.append({
+            "address": r.referee_address,
+            "status": status,
+            "created_at": r.created_at
+        })
+        
+    return {
+        "total_referrals": len(refs),
+        "purchased_count": purchased_count,
+        "no_purchase_count": no_purchase_count,
+        "referrals": output
+    }
 
 @app.get("/admin/ads")
 def get_pending_ads(db: Session = Depends(get_db), admin: str = Depends(verify_admin_signature)):
