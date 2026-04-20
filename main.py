@@ -52,6 +52,8 @@ class Plot(Base):
     is_for_sale = Column(Boolean, default=False)
     price_vim = Column(Integer, default=0)
     is_vip = Column(Boolean, default=False)
+    is_minted = Column(Boolean, default=False)
+    status = Column(String, default="purchased")
 
 class Referral(Base):
     __tablename__ = "referrals"
@@ -85,6 +87,18 @@ with engine.connect() as conn:
 
     try:
         conn.execute(text("ALTER TABLE plots ADD COLUMN is_vip BOOLEAN DEFAULT 0"))
+        conn.commit()
+    except Exception:
+        pass
+
+    try:
+        conn.execute(text("ALTER TABLE plots ADD COLUMN is_minted BOOLEAN DEFAULT 0"))
+        conn.commit()
+    except Exception:
+        pass
+
+    try:
+        conn.execute(text("ALTER TABLE plots ADD COLUMN status TEXT DEFAULT 'purchased'"))
         conn.commit()
     except Exception:
         pass
@@ -271,6 +285,10 @@ def get_approved_ads(db: Session = Depends(get_db)):
 def get_plots(db: Session = Depends(get_db)):
     return db.query(Plot).all()
 
+@app.get("/admin/plots")
+def get_admin_plots(db: Session = Depends(get_db), admin: str = Depends(verify_admin_signature)):
+    return db.query(Plot).all()
+
 @app.get("/users/{address}/plots")
 def get_user_plots(address: str, db: Session = Depends(get_db)):
     return db.query(Plot).filter(Plot.owner_address.ilike(address)).all()
@@ -296,11 +314,23 @@ def fiat_purchase(purchase: FiatPurchase, db: Session = Depends(get_db)):
     if db_plot:
         db_plot.owner_address = purchase.owner_address
         db_plot.is_for_sale = False
+        db_plot.is_minted = False
+        db_plot.status = "purchased"
     else:
-        db_plot = Plot(id=purchase.id, owner_address=purchase.owner_address, is_for_sale=False)
+        db_plot = Plot(id=purchase.id, owner_address=purchase.owner_address, is_for_sale=False, is_minted=False, status="purchased")
         db.add(db_plot)
     db.commit()
     return {"message": "Plot assigned successfully"}
+
+@app.post("/admin/plots/{plot_id}/mint")
+def mint_plot(plot_id: str, db: Session = Depends(get_db), admin: str = Depends(verify_admin_signature)):
+    db_plot = db.query(Plot).filter(Plot.id == plot_id).first()
+    if not db_plot:
+        raise HTTPException(status_code=404, detail="Plot not found")
+    db_plot.is_minted = True
+    db_plot.status = "minted"
+    db.commit()
+    return {"message": "Plot marked as minted"}
 
 @app.post("/admin/plots/claim")
 def claim_plot(plot: PlotClaim, db: Session = Depends(get_db), admin: str = Depends(verify_admin_signature)):

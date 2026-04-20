@@ -46,13 +46,17 @@ const db = new sqlite3.Database(dbPath, (err) => {
       owner_address TEXT,
       purchased_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       is_for_sale BOOLEAN DEFAULT 0,
-      price_vim INTEGER DEFAULT 0
+      price_vim INTEGER DEFAULT 0,
+      is_minted BOOLEAN DEFAULT 0,
+      status TEXT DEFAULT 'purchased'
     )`, (err) => {
       if (err) console.error('Error creating plots table', err.message);
       else {
         // Migration for existing databases
         db.run(`ALTER TABLE plots ADD COLUMN is_for_sale BOOLEAN DEFAULT 0`, (err) => {});
         db.run(`ALTER TABLE plots ADD COLUMN price_vim INTEGER DEFAULT 0`, (err) => {});
+        db.run(`ALTER TABLE plots ADD COLUMN is_minted BOOLEAN DEFAULT 0`, (err) => {});
+        db.run(`ALTER TABLE plots ADD COLUMN status TEXT DEFAULT 'purchased'`, (err) => {});
       }
     });
   }
@@ -110,11 +114,34 @@ app.get('/plots', (req, res) => {
   });
 });
 
+app.get('/admin/plots', verifyAdminSignature, (req, res) => {
+  db.all('SELECT * FROM plots', [], (err, rows) => {
+    if (err) return res.status(500).json({ detail: err.message });
+    res.json(rows);
+  });
+});
+
 app.post('/plots/buy', (req, res) => {
   const { id, owner_address } = req.body;
   db.run(`INSERT OR REPLACE INTO plots (id, owner_address, is_for_sale, price_vim) VALUES (?, ?, 0, 0)`, [id, owner_address], function(err) {
     if (err) return res.status(500).json({ detail: err.message });
     res.json({ message: "Plot purchased successfully" });
+  });
+});
+
+app.post('/plots/fiat-purchase', (req, res) => {
+  const { id, owner_address } = req.body;
+  db.run(`INSERT OR REPLACE INTO plots (id, owner_address, is_for_sale, is_minted, status) VALUES (?, ?, 0, 0, 'purchased')`, [id, owner_address], function(err) {
+    if (err) return res.status(500).json({ detail: err.message });
+    res.json({ message: "Plot assigned successfully" });
+  });
+});
+
+app.post('/admin/plots/:plot_id/mint', verifyAdminSignature, (req, res) => {
+  const plotId = req.params.plot_id;
+  db.run(`UPDATE plots SET is_minted = 1, status = 'minted' WHERE id = ?`, [plotId], function(err) {
+    if (err) return res.status(500).json({ detail: err.message });
+    res.json({ message: "Plot marked as minted" });
   });
 });
 
