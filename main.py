@@ -15,9 +15,9 @@ app = FastAPI(title="VadsWorld API")
 # Configure CORS - Ensure this is the first middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"https?://.*",
+    allow_origins=["https://vadsworld.com", "https://www.vadsworld.com"],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -347,4 +347,3 @@ def delete_ad_by_plot(lat: str, lng: str, db: Session = Depends(get_db)):
         db.delete(ad)
     db.commit()
     return {"message": f"Deleted {len(ads)} ads for plot at {lat}, {lng}"}
-# Force update 1
