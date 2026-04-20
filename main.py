@@ -12,14 +12,10 @@ from datetime import datetime, timedelta
 
 app = FastAPI(title="VadsWorld API")
 
-# Configure CORS
+# Configure CORS - Ensure this is the first middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://vadsworld.com",
-        "https://www.vadsworld.com",
-        "http://localhost:3000",
-    ],
+    allow_origin_regex=r"https?://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -84,6 +80,7 @@ with engine.connect() as conn:
 
 from web3 import Web3
 
+# BSC Configuration
 BSC_RPC_URLS = [
     "https://bsc-dataseed.binance.org",
     "https://bsc-dataseed1.defibit.io",
@@ -92,6 +89,8 @@ BSC_RPC_URLS = [
 ]
 
 CONTRACT_ADDRESS = "0x509d779e25a0E93251DD775739aD0380430bc86c"
+DEPLOYMENT_BLOCK = 40000000 # Example start block for BSC deployment
+SYNC_RANGE_PER_REQUEST = 5000 # Limit scan range to prevent timeouts
 
 # Minimal ABI for the events we need
 CONTRACT_ABI = [
@@ -138,42 +137,29 @@ def sync_plots(db: Session = Depends(get_db)):
         check_addr = Web3.to_checksum_address(CONTRACT_ADDRESS)
         contract = w3_instance.eth.contract(address=check_addr, abi=CONTRACT_ABI)
         
-        # Start from a more realistic BSC block (e.g., around early 2024)
         latest_block = w3_instance.eth.block_number
         
-        # Deep scan: Scan up to 10,000,000 blocks to find old transactions
-        MAX_TOTAL_SCAN = 10000000 
-        START_BLOCK = max(0, latest_block - MAX_TOTAL_SCAN)
+        # Limit the scan range to prevent timeouts
+        # Scan the most recent 5,000 blocks by default
+        start_block = max(DEPLOYMENT_BLOCK, latest_block - SYNC_RANGE_PER_REQUEST)
         
-        print(f"Latest block: {latest_block}, Scanning from: {START_BLOCK}")
+        print(f"Latest block: {latest_block}, Scanning range: {start_block} to {latest_block}")
         
         transfer_events = []
-        current_block = START_BLOCK
-        sync_end = latest_block
-        CHUNK_SIZE = 10000 # Larger chunks for faster scanning
-        
-        while current_block <= sync_end:
-            end_block = min(current_block + CHUNK_SIZE - 1, sync_end)
-            
+        try:
+            # Fetch events in one go for the 5,000 block range
+            transfer_events = contract.events.Transfer.get_logs(from_block=start_block, to_block=latest_block)
+        except Exception as e:
+            print(f"Log fetch error: {e}")
+            # Potentially retry with even smaller chunks if needed
+            mid = start_block + (SYNC_RANGE_PER_REQUEST // 2)
             try:
-                # Use a try-except to handle potential JSON-RPC limits
-                chunk_events = contract.events.Transfer.get_logs(from_block=current_block, to_block=end_block)
-                transfer_events.extend(chunk_events)
-            except Exception:
-                # Fallback to smaller chunk if big one fails
-                try:
-                    mid = current_block + (CHUNK_SIZE // 2)
-                    c1 = contract.events.Transfer.get_logs(from_block=current_block, to_block=mid)
-                    c2 = contract.events.Transfer.get_logs(from_block=mid+1, to_block=end_block)
-                    transfer_events.extend(c1)
-                    transfer_events.extend(c2)
-                except Exception:
-                    pass
-            
-            current_block = end_block + 1
-            # Rate limiting
-            if len(transfer_events) % 50 == 0:
-                time.sleep(0.05)
+                c1 = contract.events.Transfer.get_logs(from_block=start_block, to_block=mid)
+                c2 = contract.events.Transfer.get_logs(from_block=mid+1, to_block=latest_block)
+                transfer_events.extend(c1)
+                transfer_events.extend(c2)
+            except:
+                pass
 
         token_owners = {}
         # 1. Force the user's specific plot to be in the map (Manual backup)
@@ -214,7 +200,7 @@ def sync_plots(db: Session = Depends(get_db)):
                 updated_count += 1
                 
         db.commit()
-        return {"message": f"Sync complete. Target plot {TARGET_PLOT_ID} linked. Scanned 10M blocks. Found {len(transfer_events)} transfers."}
+        return {"message": f"Sync complete. Target plot {TARGET_PLOT_ID} linked. Scanned {latest_block - start_block} blocks. Found {len(transfer_events)} transfers."}
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
