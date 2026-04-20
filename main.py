@@ -12,6 +12,10 @@ from datetime import datetime, timedelta
 
 app = FastAPI(title="VadsWorld API")
 
+@app.get("/")
+def health_check():
+    return {"status": "ok", "message": "VadsWorld API is running"}
+
 # Configure CORS - Ensure this is the first middleware
 app.add_middleware(
     CORSMiddleware,
