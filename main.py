@@ -446,3 +446,6 @@ def delete_ad_by_plot(lat: str, lng: str, db: Session = Depends(get_db)):
         db.delete(ad)
     db.commit()
     return {"message": f"Deleted {len(ads)} ads for plot at {lat}, {lng}"}
+
+# Force update for Railway deployment - Version 1.1
+# Syncing coordinates to 41.599100_41.623300
