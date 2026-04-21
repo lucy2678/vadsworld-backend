@@ -48,17 +48,46 @@ const db = new sqlite3.Database(dbPath, (err) => {
       is_for_sale BOOLEAN DEFAULT 0,
       price_vim INTEGER DEFAULT 0,
       is_minted BOOLEAN DEFAULT 0,
-      status TEXT DEFAULT 'purchased'
+      status TEXT DEFAULT 'purchased',
+      token_id TEXT
     )`, (err) => {
       if (err) console.error('Error creating plots table', err.message);
       else {
-        // Migration for existing databases
-        db.run(`ALTER TABLE plots ADD COLUMN is_for_sale BOOLEAN DEFAULT 0`, (err) => {});
-        db.run(`ALTER TABLE plots ADD COLUMN price_vim INTEGER DEFAULT 0`, (err) => {});
-        db.run(`ALTER TABLE plots ADD COLUMN is_minted BOOLEAN DEFAULT 0`, (err) => {});
-        db.run(`ALTER TABLE plots ADD COLUMN status TEXT DEFAULT 'purchased'`, (err) => {});
+        // Migration to add missing columns to plots
+        const columns = ['is_for_sale', 'price_vim', 'is_vip', 'is_minted', 'status', 'token_id'];
+        columns.forEach(col => {
+          db.run(`ALTER TABLE plots ADD COLUMN ${col} ${col.includes('price') ? 'INTEGER DEFAULT 0' : (col.includes('is_') ? 'BOOLEAN DEFAULT 0' : 'TEXT')}`, (err) => {
+            // Ignore error if column already exists
+          });
+        });
+
+        // NORMALIZE EXISTING PLOT IDS TO 6 DECIMALS
+        db.all("SELECT id FROM plots", (err, rows) => {
+          if (!err && rows) {
+            rows.forEach(row => {
+              if (row.id.includes('_')) {
+                const [lng, lat] = row.id.split('_');
+                const flLng = parseFloat(lng);
+                const flLat = parseFloat(lat);
+                const newId = `${flLng.toFixed(6)}_${flLat.toFixed(6)}`;
+                if (newId !== row.id) {
+                  db.run("UPDATE plots SET id = ? WHERE id = ?", [newId, row.id], (err) => {
+                    if (!err) {
+                       db.run("UPDATE ads SET lat = ?, lng = ? WHERE lat = ? AND lng = ?", 
+                         [flLat.toFixed(6), flLng.toFixed(6), lat, lng]
+                       );
+                    }
+                  });
+                }
+              }
+            });
+          }
+        });
       }
     });
+
+    // Make sure ads has expiry_date
+    db.run(`ALTER TABLE ads ADD COLUMN expiry_date DATETIME`, () => {});
   }
 });
 
@@ -123,17 +152,35 @@ app.get('/admin/plots', verifyAdminSignature, (req, res) => {
 
 app.post('/plots/buy', (req, res) => {
   const { id, owner_address } = req.body;
-  db.run(`INSERT OR REPLACE INTO plots (id, owner_address, is_for_sale, price_vim) VALUES (?, ?, 0, 0)`, [id, owner_address], function(err) {
+  if (!id || !owner_address) return res.status(400).json({ error: "id and owner_address required" });
+  
+  let normalizedId = id;
+  if (id.includes('_')) {
+    const [pLng, pLat] = id.split('_');
+    normalizedId = `${parseFloat(pLng).toFixed(6)}_${parseFloat(pLat).toFixed(6)}`;
+  }
+
+  db.run(`INSERT OR REPLACE INTO plots (id, owner_address, is_for_sale, price_vim, is_minted, status) VALUES (?, ?, 0, 0, 0, 'purchased')`, 
+    [normalizedId, owner_address], function(err) {
     if (err) return res.status(500).json({ detail: err.message });
-    res.json({ message: "Plot purchased successfully" });
+    res.json({ message: "Plot purchased successfully", id: normalizedId });
   });
 });
 
 app.post('/plots/fiat-purchase', (req, res) => {
   const { id, owner_address } = req.body;
-  db.run(`INSERT OR REPLACE INTO plots (id, owner_address, is_for_sale, is_minted, status) VALUES (?, ?, 0, 0, 'purchased')`, [id, owner_address], function(err) {
+  if (!id || !owner_address) return res.status(400).json({ error: "id and owner_address required" });
+
+  let normalizedId = id;
+  if (id.includes('_')) {
+    const [pLng, pLat] = id.split('_');
+    normalizedId = `${parseFloat(pLng).toFixed(6)}_${parseFloat(pLat).toFixed(6)}`;
+  }
+
+  db.run(`INSERT OR REPLACE INTO plots (id, owner_address, is_for_sale, is_minted, status) VALUES (?, ?, 0, 0, 'purchased')`, 
+    [normalizedId, owner_address], function(err) {
     if (err) return res.status(500).json({ detail: err.message });
-    res.json({ message: "Plot assigned successfully" });
+    res.json({ message: "Plot assigned successfully", id: normalizedId });
   });
 });
 

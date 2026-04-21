@@ -188,10 +188,8 @@ def sync_plots(db: Session = Depends(get_db)):
 
         token_owners = {}
         # 1. Force the user's specific plot to be in the map (Manual backup)
-        # ID 1 corresponds to coordinates on the map the user specified or sequentially.
-        # However, to be safe, we will ensure the plot entry exists.
         USER_WALLET = "0x5D1550A94f2330008E7fE475745AEb3098ECc210".lower()
-        TARGET_PLOT_ID = "41.59905_41.62325"
+        TARGET_PLOT_ID = "41.599100_41.623300"
         
         # 2. Process blockchain logs
         for event in transfer_events:
@@ -310,17 +308,22 @@ def sell_plot(plot_sell: PlotSell, db: Session = Depends(get_db)):
 
 @app.post("/plots/fiat-purchase")
 def fiat_purchase(purchase: FiatPurchase, db: Session = Depends(get_db)):
-    db_plot = db.query(Plot).filter(Plot.id == purchase.id).first()
+    plot_id = purchase.id
+    if "_" in plot_id:
+        lng, lat = plot_id.split("_")
+        plot_id = f"{float(lng):.6f}_{float(lat):.6f}"
+
+    db_plot = db.query(Plot).filter(Plot.id == plot_id).first()
     if db_plot:
         db_plot.owner_address = purchase.owner_address
         db_plot.is_for_sale = False
         db_plot.is_minted = False
         db_plot.status = "purchased"
     else:
-        db_plot = Plot(id=purchase.id, owner_address=purchase.owner_address, is_for_sale=False, is_minted=False, status="purchased")
+        db_plot = Plot(id=plot_id, owner_address=purchase.owner_address, is_for_sale=False, is_minted=False, status="purchased")
         db.add(db_plot)
     db.commit()
-    return {"message": "Plot assigned successfully"}
+    return {"message": "Plot assigned successfully", "id": plot_id}
 
 @app.post("/admin/plots/{plot_id}/mint")
 def mint_plot(plot_id: str, db: Session = Depends(get_db), admin: str = Depends(verify_admin_signature)):
