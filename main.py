@@ -435,6 +435,34 @@ def delete_user_ads(address: str, db: Session = Depends(get_db)):
     db.commit()
     return {"message": f"Deleted all ads for {address}"}
 
+@app.get("/debug/db-dump/{address}")
+def dump_db_for_user(address: str, db: Session = Depends(get_db)):
+    plots = db.query(Plot).filter(Plot.owner_address.ilike(address)).all()
+    ads = db.query(Ad).filter(Ad.user_address.ilike(address)).all()
+    return {
+        "address": address,
+        "plots": [{"id": p.id, "status": p.status, "is_minted": p.is_minted} for p in plots],
+        "ads": [{"id": a.id, "status": a.status, "text": a.text} for a in ads]
+    }
+
+@app.get("/debug/full-fix/{address}")
+def full_fix_user(address: str, db: Session = Depends(get_db)):
+    # 1. Delete all ads for this user
+    deleted_ads = db.query(Ad).filter(Ad.user_address.ilike(address)).delete(synchronize_session=False)
+    
+    # 2. Mark all their plots as minted/owned properly
+    plots = db.query(Plot).filter(Plot.owner_address.ilike(address)).all()
+    for p in plots:
+        p.is_minted = True
+        p.status = "minted"
+    
+    db.commit()
+    return {
+        "message": "Cleanup and Fix performed",
+        "deleted_ads": deleted_ads,
+        "updated_plots_count": len(plots)
+    }
+
 @app.get("/admin/ads")
 def get_pending_ads(db: Session = Depends(get_db), admin: str = Depends(verify_admin_signature)):
     return db.query(Ad).filter(Ad.status == "pending").all()
