@@ -193,18 +193,35 @@ def sync_plots(db: Session = Depends(get_db)):
         
         # 2. Process blockchain logs
         for event in transfer_events:
-            token_id = event['args']['tokenId']
+            token_id = str(event['args']['tokenId'])
             to_addr = event['args']['to']
-            token_owners[str(token_id)] = to_addr.lower()
+            token_owners[token_id] = to_addr.lower()
             
         # 3. Apply changes to DB
         added_count = 0
         updated_count = 0
         
+        # Build a map of existing coordinate plots and their hashes to match with numeric tokenIds
+        coord_plots = db.query(Plot).filter(Plot.id.contains('_')).all()
+        hash_to_coord_id = {}
+        for p in coord_plots:
+            # Replicate the JS hash logic: hash = ((hash << 5) - hash) + charCode; hash |= 0;
+            h = 0
+            for char in p.id:
+                h = ((h << 5) - h) + ord(char)
+                h &= 0xFFFFFFFF  # Keep it 32-bit
+            # Handle signed/unsigned mismatch by using the same logic as JS Math.abs(hash | 0)
+            # In Python, we need to mimic the 32-bit signed int behavior
+            signed_h = h
+            if signed_h > 0x7FFFFFFF:
+                signed_h -= 0x100000000
+            final_hash = str(abs(signed_h))
+            hash_to_coord_id[final_hash] = p.id
+
         # Ensure the specific plot manual entry
         db_target = db.query(Plot).filter(Plot.id == TARGET_PLOT_ID).first()
         if not db_target:
-            db.add(Plot(id=TARGET_PLOT_ID, owner_address=USER_WALLET))
+            db.add(Plot(id=TARGET_PLOT_ID, owner_address=USER_WALLET, is_minted=False))
             added_count += 1
         else:
             db_target.owner_address = USER_WALLET
@@ -214,9 +231,19 @@ def sync_plots(db: Session = Depends(get_db)):
             if not owner or owner == "0x0000000000000000000000000000000000000000":
                 continue
                 
+            # Check if this tokenId belongs to a coordinate plot
+            matched_coord_id = hash_to_coord_id.get(t_id)
+            if matched_coord_id:
+                db_plot = db.query(Plot).filter(Plot.id == matched_coord_id).first()
+                if db_plot:
+                    db_plot.is_minted = True
+                    db_plot.owner_address = owner.lower()
+                    updated_count += 1
+                    continue
+
             db_plot = db.query(Plot).filter(Plot.id == t_id).first()
             if not db_plot:
-                db.add(Plot(id=t_id, owner_address=owner))
+                db.add(Plot(id=t_id, owner_address=owner, is_minted=True))
                 added_count += 1
             elif db_plot.owner_address.lower() != owner.lower():
                 db_plot.owner_address = owner
@@ -401,6 +428,12 @@ def get_referral_stats(address: str, db: Session = Depends(get_db)):
         "no_purchase_count": no_purchase_count,
         "referrals": output
     }
+
+@app.get("/debug/delete-ads/{address}")
+def delete_user_ads(address: str, db: Session = Depends(get_db)):
+    db.query(Ad).filter(Ad.user_address.ilike(address)).delete(synchronize_session=False)
+    db.commit()
+    return {"message": f"Deleted all ads for {address}"}
 
 @app.get("/admin/ads")
 def get_pending_ads(db: Session = Depends(get_db), admin: str = Depends(verify_admin_signature)):
