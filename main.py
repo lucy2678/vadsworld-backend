@@ -509,6 +509,19 @@ def delete_ad(ad_id: int, db: Session = Depends(get_db), admin: str = Depends(ve
     db.commit()
     return {"message": "Ad deleted successfully"}
 
+@app.delete("/admin/plots/{plot_id}")
+def delete_plot(plot_id: str, db: Session = Depends(get_db), admin: str = Depends(verify_admin_signature)):
+    plot = db.query(Plot).filter(Plot.id == plot_id).first()
+    if not plot:
+        raise HTTPException(status_code=404, detail="Plot not found")
+    
+    # Also delete associated ads
+    db.query(Ad).filter(Ad.lat == plot.id.split('_')[1], Ad.lng == plot.id.split('_')[0]).delete(synchronize_session=False)
+    
+    db.delete(plot)
+    db.commit()
+    return {"message": "Plot deleted successfully"}
+
 @app.delete("/ads/plot/{lat}/{lng}")
 def delete_ad_by_plot(lat: str, lng: str, db: Session = Depends(get_db)):
     # Delete ads for this plot when ownership changes
