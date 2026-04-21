@@ -61,7 +61,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
           });
         });
 
-        // NORMALIZE EXISTING PLOT IDS TO 6 DECIMALS
+        // NORMALIZE EXISTING PLOT IDS TO 0.0002 GRID CENTERS
         db.all("SELECT id FROM plots", (err, rows) => {
           if (!err && rows) {
             rows.forEach(row => {
@@ -69,12 +69,21 @@ const db = new sqlite3.Database(dbPath, (err) => {
                 const [lng, lat] = row.id.split('_');
                 const flLng = parseFloat(lng);
                 const flLat = parseFloat(lat);
-                const newId = `${flLng.toFixed(6)}_${flLat.toFixed(6)}`;
+                
+                // Align to 0.0002 grid centers
+                // edge = Math.round(val / 0.0002) * 0.0002
+                // center = edge + 0.0001
+                const edgeLng = Math.round(flLng / 0.0002) * 0.0002;
+                const edgeLat = Math.round(flLat / 0.0002) * 0.0002;
+                const centerLng = (edgeLng + 0.0001).toFixed(6);
+                const centerLat = (edgeLat + 0.0001).toFixed(6);
+                
+                const newId = `${centerLng}_${centerLat}`;
                 if (newId !== row.id) {
                   db.run("UPDATE plots SET id = ? WHERE id = ?", [newId, row.id], (err) => {
                     if (!err) {
                        db.run("UPDATE ads SET lat = ?, lng = ? WHERE lat = ? AND lng = ?", 
-                         [flLat.toFixed(6), flLng.toFixed(6), lat, lng]
+                         [centerLat, centerLng, lat, lng]
                        );
                     }
                   });
@@ -157,7 +166,9 @@ app.post('/plots/buy', (req, res) => {
   let normalizedId = id;
   if (id.includes('_')) {
     const [pLng, pLat] = id.split('_');
-    normalizedId = `${parseFloat(pLng).toFixed(6)}_${parseFloat(pLat).toFixed(6)}`;
+    const edgeLng = Math.round(parseFloat(pLng) / 0.0002) * 0.0002;
+    const edgeLat = Math.round(parseFloat(pLat) / 0.0002) * 0.0002;
+    normalizedId = `${(edgeLng + 0.0001).toFixed(6)}_${(edgeLat + 0.0001).toFixed(6)}`;
   }
 
   db.run(`INSERT OR REPLACE INTO plots (id, owner_address, is_for_sale, price_vim, is_minted, status) VALUES (?, ?, 0, 0, 0, 'purchased')`, 
@@ -174,7 +185,9 @@ app.post('/plots/fiat-purchase', (req, res) => {
   let normalizedId = id;
   if (id.includes('_')) {
     const [pLng, pLat] = id.split('_');
-    normalizedId = `${parseFloat(pLng).toFixed(6)}_${parseFloat(pLat).toFixed(6)}`;
+    const edgeLng = Math.round(parseFloat(pLng) / 0.0002) * 0.0002;
+    const edgeLat = Math.round(parseFloat(pLat) / 0.0002) * 0.0002;
+    normalizedId = `${(edgeLng + 0.0001).toFixed(6)}_${(edgeLat + 0.0001).toFixed(6)}`;
   }
 
   db.run(`INSERT OR REPLACE INTO plots (id, owner_address, is_for_sale, is_minted, status) VALUES (?, ?, 0, 0, 'purchased')`, 

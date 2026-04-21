@@ -26,8 +26,8 @@ app.add_middleware(
 )
 
 # Database Setup
-os.makedirs("/app/data", exist_ok=True)
-SQLALCHEMY_DATABASE_URL = "sqlite:////app/data/vadsworld.db"
+db_path = os.path.join(os.path.dirname(__file__), "vadsworld.db")
+SQLALCHEMY_DATABASE_URL = f"sqlite:///{db_path}"
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -311,7 +311,9 @@ def fiat_purchase(purchase: FiatPurchase, db: Session = Depends(get_db)):
     plot_id = purchase.id
     if "_" in plot_id:
         lng, lat = plot_id.split("_")
-        plot_id = f"{float(lng):.6f}_{float(lat):.6f}"
+        edge_lng = round(float(lng) / 0.0002) * 0.0002
+        edge_lat = round(float(lat) / 0.0002) * 0.0002
+        plot_id = f"{(edge_lng + 0.0001):.6f}_{(edge_lat + 0.0001):.6f}"
 
     db_plot = db.query(Plot).filter(Plot.id == plot_id).first()
     if db_plot:
