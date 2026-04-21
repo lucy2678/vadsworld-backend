@@ -500,6 +500,15 @@ def clear_all_plots(db: Session = Depends(get_db), admin: str = Depends(verify_a
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.delete("/admin/ads/{ad_id}")
+def delete_ad(ad_id: int, db: Session = Depends(get_db), admin: str = Depends(verify_admin_signature)):
+    ad = db.query(Ad).filter(Ad.id == ad_id).first()
+    if not ad:
+        raise HTTPException(status_code=404, detail="Ad not found")
+    db.delete(ad)
+    db.commit()
+    return {"message": "Ad deleted successfully"}
+
 @app.delete("/ads/plot/{lat}/{lng}")
 def delete_ad_by_plot(lat: str, lng: str, db: Session = Depends(get_db)):
     # Delete ads for this plot when ownership changes
